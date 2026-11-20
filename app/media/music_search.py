@@ -12,6 +12,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
 from app.core.logging import get_logger
 from app.core.units import human_duration
@@ -19,8 +20,7 @@ from app.media.downloader import _build_ytdlp_opts, _make_ydl
 
 log = get_logger(__name__)
 
-_IN_MEMORY_SESSIONS: dict[str, dict[str, Any]] = {}
-_IN_MEMORY_SESSIONS_CAP = 1024
+_IN_MEMORY_SESSIONS = FallbackCache(1024, 3600)
 
 _spotify_cached_token: str | None = None
 _spotify_token_expires_at: float = 0.0
@@ -275,11 +275,10 @@ async def store_search_session(sid: str, payload: dict[str, Any]) -> None:
     try:
         redis = get_redis()
         await redis.set(key, json.dumps(payload), ex=3600)
+        _IN_MEMORY_SESSIONS.discard(sid)
     except Exception as exc:
         log.warning("music_search_session_redis_failed", error=str(exc))
-        _IN_MEMORY_SESSIONS[sid] = payload
-        while len(_IN_MEMORY_SESSIONS) > _IN_MEMORY_SESSIONS_CAP:
-            _IN_MEMORY_SESSIONS.pop(next(iter(_IN_MEMORY_SESSIONS)))
+        _IN_MEMORY_SESSIONS.put(sid, payload)
 
 
 async def get_search_session(sid: str) -> dict[str, Any] | None:

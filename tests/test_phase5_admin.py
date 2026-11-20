@@ -107,9 +107,11 @@ async def test_export_users_json_and_txt(session: AsyncSession, tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-async def test_create_db_backup(settings: Settings, tmp_path: Path) -> None:
+async def test_create_db_backup(settings: Settings, tmp_path: Path, session: AsyncSession) -> None:
     """pg_dump fixture test inside container."""
-    real_settings = settings.model_copy(update={"postgres_password": REAL_DB["postgres_password"]})
+    # Like other DB integration tests, require a reachable test database. Use
+    # its full connection details rather than just copying its password.
+    real_settings = settings.model_copy(update=REAL_DB)
     backup_file = await create_db_backup(real_settings, tmp_path)
     assert backup_file.is_file()
     assert backup_file.stat().st_size > 0

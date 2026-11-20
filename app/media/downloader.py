@@ -32,7 +32,9 @@ from urllib.parse import urlparse
 
 import yt_dlp
 
+from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
+from app.config import get_settings
 from app.core.errors import ConversionError
 from app.core.logging import get_logger
 from app.core.units import human_duration
@@ -49,8 +51,7 @@ def _make_ydl(opts: dict[str, Any]) -> yt_dlp.YoutubeDL:
 
 
 # Fallback in-memory token cache (token -> payload dict, capped).
-_IN_MEMORY_TOKENS: dict[str, dict[str, Any]] = {}
-_IN_MEMORY_TOKENS_CAP = 1024
+_IN_MEMORY_TOKENS = FallbackCache(1024, 3600)
 
 URL_REGEX = re.compile(
     r"https?://(?:www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_+.~#?&/=]*)",
@@ -74,9 +75,9 @@ PLATFORM_INFO: dict[str, tuple[str, str]] = {
 
 def find_cookie_file(platform_key: str | None = None) -> Path | None:
     """Check for platform-specific cookie file."""
-    if not platform_key or platform_key in ("spotify", "other"):
+    if platform_key not in PLATFORM_INFO or platform_key in ("spotify", "other"):
         return None
-    p = Path(f"/data/cookies/{platform_key}.txt")
+    p = get_settings().cookie_dir / f"{platform_key}.txt"
     try:
         if p.is_file() and p.stat().st_size > 0 and os.access(p, os.R_OK):
             return p
@@ -292,11 +293,10 @@ async def store_download_context(token: str, payload: dict[str, Any]) -> None:
     try:
         redis = get_redis()
         await redis.set(key, json.dumps(payload), ex=3600)
+        _IN_MEMORY_TOKENS.discard(token)
     except Exception as exc:
         log.warning("downloader_token_redis_failed", error=str(exc))
-        _IN_MEMORY_TOKENS[token] = payload
-        while len(_IN_MEMORY_TOKENS) > _IN_MEMORY_TOKENS_CAP:
-            _IN_MEMORY_TOKENS.pop(next(iter(_IN_MEMORY_TOKENS)))
+        _IN_MEMORY_TOKENS.put(token, payload)
 
 
 async def get_download_context(token: str) -> dict[str, Any] | None:
@@ -635,8 +635,8 @@ def _probe_info_sync(url: str, cookie_file: str | None = None) -> DownloadInfo:
 
             # 2. If tried anonymously and failed, retry with disk cookie if available
             elif not opts.get("cookiefile"):
-                disk_cookie = Path("/data/cookies/instagram.txt")
-                if disk_cookie.is_file() and disk_cookie.stat().st_size > 0:
+                disk_cookie = find_cookie_file("instagram")
+                if disk_cookie:
                     opts_cookie = dict(opts)
                     opts_cookie["cookiefile"] = str(disk_cookie)
                     try:

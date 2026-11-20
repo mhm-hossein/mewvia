@@ -12,6 +12,7 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
 from app.callbacks import MenuCB, NoopCB
 from app.callbacks.game import GameCB
@@ -49,7 +50,7 @@ _VALID_DIFFS = frozenset(DIFF_LABELS)
 _XO_SESSION_TTL = 2 * 60 * 60
 _XO_SESSION_CAP = 2048
 # Fallback store when Redis is unavailable (tests / local runs).
-_XO_SESSIONS: dict[str, dict[str, Any]] = {}
+_XO_SESSIONS = FallbackCache(_XO_SESSION_CAP, _XO_SESSION_TTL)
 
 
 def _xo_key(chat_id: int, message_id: int) -> str:
@@ -75,17 +76,16 @@ async def save_xo_session(chat_id: int, message_id: int, board: str, diff: str) 
     payload = {"board": board, "diff": diff}
     try:
         await get_redis().set(key, json.dumps(payload), ex=_XO_SESSION_TTL)
+        _XO_SESSIONS.discard(key)
     except Exception as exc:
         log.warning("xo_session_redis_set_failed", error=str(exc))
-        _XO_SESSIONS[key] = payload
-        while len(_XO_SESSIONS) > _XO_SESSION_CAP:
-            _XO_SESSIONS.pop(next(iter(_XO_SESSIONS)))
+        _XO_SESSIONS.put(key, payload)
 
 
 async def drop_xo_session(chat_id: int, message_id: int) -> None:
     """Finish a game so its callbacks cannot be replayed for more points."""
     key = _xo_key(chat_id, message_id)
-    _XO_SESSIONS.pop(key, None)
+    _XO_SESSIONS.discard(key)
     try:
         await get_redis().delete(key)
     except Exception as exc:

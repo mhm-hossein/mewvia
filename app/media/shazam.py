@@ -11,6 +11,7 @@ from typing import Any
 from aiogram import html
 from shazamio import Shazam
 
+from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
 from app.callbacks.shazam import ShazamCB
 from app.core.errors import ConversionError
@@ -23,8 +24,7 @@ from app.ui.styles import Style
 
 log = get_logger(__name__)
 
-_IN_MEMORY_SHAZAM: dict[str, dict[str, Any]] = {}
-_IN_MEMORY_SHAZAM_CAP = 2048
+_IN_MEMORY_SHAZAM = FallbackCache(2048, 3600)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +76,10 @@ async def store_shazam_session(sid: str, track: ShazamTrack) -> None:
     try:
         redis = get_redis()
         await redis.set(key, json.dumps(payload), ex=3600)
+        _IN_MEMORY_SHAZAM.discard(sid)
     except Exception as exc:
         log.warning("shazam_session_redis_store_failed", error=str(exc))
-        _IN_MEMORY_SHAZAM[sid] = payload
-        while len(_IN_MEMORY_SHAZAM) > _IN_MEMORY_SHAZAM_CAP:
-            _IN_MEMORY_SHAZAM.pop(next(iter(_IN_MEMORY_SHAZAM)))
+        _IN_MEMORY_SHAZAM.put(sid, payload)
 
 
 async def get_shazam_session(sid: str) -> ShazamTrack | None:

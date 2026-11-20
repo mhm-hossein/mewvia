@@ -8,6 +8,7 @@ so rendering is executed in a ProcessPoolExecutor with `mp_context=get_context("
 from __future__ import annotations
 
 import asyncio
+import gzip
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 from pathlib import Path
@@ -30,7 +31,7 @@ def _init_process_pool() -> ProcessPoolExecutor:
 
 
 def _render_tgs_worker(
-    tgs_path: str, out_dir: str, target_width: int, target_height: int
+    tgs_path: str, out_dir: str, target_width: int, target_height: int, first_only: bool = False
 ) -> dict[str, Any]:
     """Worker process: loads TGS via rlottie and saves frames as PNGs."""
     from rlottie_python import LottieAnimation
@@ -40,7 +41,11 @@ def _render_tgs_worker(
 
     try:
         if tgs_file.suffix == ".tgs":
-            anim = LottieAnimation.from_tgs(str(tgs_file))
+            with gzip.open(tgs_file) as stream:
+                data = stream.read(4 * 1024 * 1024 + 1)
+            if len(data) > 4 * 1024 * 1024:
+                return {"error": "Lottie document too large"}
+            anim = LottieAnimation(data=data.decode("utf-8"))
         else:
             anim = LottieAnimation.from_file(str(tgs_file))
     except Exception as exc:
@@ -50,14 +55,20 @@ def _render_tgs_worker(
     fps = float(anim.lottie_animation_get_framerate())
     duration = float(anim.lottie_animation_get_duration())
 
+    # Telegram animated stickers are at most 3 seconds at 60 fps. Allow some
+    # headroom for other animations without letting a job fill the temp volume.
+    frames_to_render = min(1, total_frames) if first_only else total_frames
+    if not 1 <= frames_to_render <= 360:
+        return {"error": "Unsupported Lottie frame count"}
+
     frame_paths: list[str] = []
-    for frame_num in range(total_frames):
+    for frame_num in range(frames_to_render):
         frame_file = out_path / f"frame_{frame_num:04d}.png"
         try:
-            img = anim.render_pillow_frame(frame_num)
-            if target_width > 0 and target_height > 0:
-                img = img.resize((target_width, target_height))
-            img.save(frame_file, "PNG")
+            with anim.render_pillow_frame(
+                frame_num, width=target_width, height=target_height
+            ) as img:
+                img.save(frame_file, "PNG")
             frame_paths.append(str(frame_file))
         except Exception as exc:
             return {"error": f"Failed to render frame {frame_num}: {exc}"}
@@ -76,6 +87,7 @@ async def render_tgs_to_frames(
     *,
     target_width: int = 512,
     target_height: int = 512,
+    first_only: bool = False,
 ) -> dict[str, Any]:
     """Render TGS file to a folder of PNG frames in a dedicated process."""
     out_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240
@@ -89,6 +101,7 @@ async def render_tgs_to_frames(
         str(out_dir),
         target_width,
         target_height,
+        first_only,
     )
 
     if "error" in res:

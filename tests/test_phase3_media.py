@@ -167,6 +167,8 @@ async def test_convert_tgs_to_png_and_webm_sticker(tmp_path: Path) -> None:
     assert out_png.path.is_file()
     assert out_png.info.video_codec == "png"
 
+    assert len(list((tmp_path / "tgs_frames").glob("frame_*.png"))) == 1
+
     # TGS -> WEBM video sticker
     out_webm = await convert(tgs_file, MediaKind.STICKER_ANIMATED, TARGET_WEBM_STICKER, tmp_path)
     assert out_webm.path.is_file()

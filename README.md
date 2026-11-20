@@ -140,3 +140,14 @@ app/
 
 Python 3.12 · aiogram 3.30 (Bot API 10.2) · PostgreSQL 17 · Redis 7 ·
 SQLAlchemy 2 + Alembic · ffmpeg · rlottie-python · Pillow · Docker Compose
+
+### استقرار با SSH
+
+قبل از اجرای `deploy_remote.py` کلید SSH سرور را بررسی و به `known_hosts` اضافه کنید.
+مقصد را با `MEWVIA_REMOTE_HOST`، `MEWVIA_REMOTE_USER`، `MEWVIA_REMOTE_PASSWORD` و
+`MEWVIA_REMOTE_DIR` مشخص کنید. فایل `.env` تولید را روی خود سرور بسازید؛ فایل محلی ارسال نمی‌شود.
+اسکریپت با Compose تولید، ایمیج‌ها را می‌سازد، migrationها را در کانتینر جدا اجرا می‌کند
+و منتظر آماده شدن سرویس‌ها می‌ماند.
+
+مسیر پیش‌فرض کوکی‌ها `/data/cookies` است و با `COOKIE_DIR` تغییر می‌کند. برای سازگاری،
+کوکی فعال اینستاگرام در فایل `cookies.txt` در پوشهٔ والد هم نوشته می‌شود؛ این پوشه باید خصوصی باشد.

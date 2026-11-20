@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
+import uuid
 from pathlib import Path
 
 from app.config import Settings
@@ -21,7 +23,8 @@ async def create_db_backup(settings: Settings, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240
 
     timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
-    backup_path = out_dir / f"mewvia_backup_{timestamp}.dump"
+    backup_path = out_dir / f"mewvia_backup_{timestamp}_{uuid.uuid4().hex}.dump"
+    partial = backup_path.with_suffix(".partial")
 
     password = settings.postgres_password
 
@@ -37,10 +40,11 @@ async def create_db_backup(settings: Settings, out_dir: Path) -> Path:
         settings.postgres_db,
         "-Fc",  # custom compressed format
         "-f",
-        str(backup_path),
+        str(partial),
     ]
 
-    env = {"PGPASSWORD": password}
+    env = {k: os.environ[k] for k in ("PATH", "LD_LIBRARY_PATH", "SYSTEMROOT") if k in os.environ}
+    env["PGPASSWORD"] = password
 
     log.info("backup_start", destination=str(backup_path))
 
@@ -48,10 +52,20 @@ async def create_db_backup(settings: Settings, out_dir: Path) -> Path:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             env=env,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _stdout, stderr = await proc.communicate()
+        try:
+            _stdout, stderr = await proc.communicate()
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.communicate()
+            if proc.returncode != 0:
+                partial.unlink(missing_ok=True)
     except Exception as exc:
         log.error("backup_failed_to_spawn", error=str(exc))
         raise MewviaError(f"failed to spawn pg_dump: {exc}", code="backup_failed") from exc
@@ -61,5 +75,6 @@ async def create_db_backup(settings: Settings, out_dir: Path) -> Path:
         log.error("backup_pg_dump_error", returncode=proc.returncode, stderr=err_msg)
         raise MewviaError(f"pg_dump failed: {err_msg}", code="backup_failed")
 
+    partial.replace(backup_path)
     log.info("backup_complete", path=str(backup_path), size=backup_path.stat().st_size)
     return backup_path

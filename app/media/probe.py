@@ -50,8 +50,9 @@ async def probe(path: Path, *, timeout: float = 30.0) -> MediaInfo:  # noqa: ASY
         "error",
         "-print_format",
         "json",
-        "-show_format",
-        "-show_streams",
+        "-show_entries",
+        "format=duration,size:"
+        "stream=codec_type,codec_name,width,height,r_frame_rate,duration,pix_fmt",
         str(path),
     ]
 
@@ -64,9 +65,14 @@ async def probe(path: Path, *, timeout: float = 30.0) -> MediaInfo:  # noqa: ASY
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
             raise ProbeError(f"ffprobe timed out after {timeout}s: {path}") from None
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.communicate()
     except ProbeError:
         raise
     except Exception as exc:

@@ -554,6 +554,8 @@ class TestGetMissingSponsors:
     ) -> list[SponsorChannel]:
         bot = AsyncMock(spec=Bot)
         session = AsyncMock(spec=AsyncSession)
+        session.execute.return_value = MagicMock()
+        session.execute.return_value.scalar_one_or_none.return_value = None
 
         repo_mock = AsyncMock()
         repo_mock.get_active_channels.return_value = channels

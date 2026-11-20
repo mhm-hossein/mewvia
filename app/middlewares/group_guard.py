@@ -17,20 +17,14 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
+from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
 # Fallback in-memory store if Redis is unavailable (capped: evict oldest first).
-_IN_MEMORY_PANELS: dict[str, dict[str, Any]] = {}
-_IN_MEMORY_PANELS_CAP = 2048
-
-
-def _remember_panel(key: str, payload: dict[str, Any]) -> None:
-    _IN_MEMORY_PANELS[key] = payload
-    while len(_IN_MEMORY_PANELS) > _IN_MEMORY_PANELS_CAP:
-        _IN_MEMORY_PANELS.pop(next(iter(_IN_MEMORY_PANELS)))
+_IN_MEMORY_PANELS = FallbackCache(2048, 86400)
 
 
 async def store_panel(
@@ -57,9 +51,10 @@ async def store_panel(
     try:
         redis = get_redis()
         await redis.set(key, json.dumps(payload), ex=86400)
+        _IN_MEMORY_PANELS.discard(key)
     except Exception as exc:
         log.warning("panel_store_redis_failed", error=str(exc))
-        _remember_panel(key, payload)
+        _IN_MEMORY_PANELS.put(key, payload)
 
 
 async def get_panel(chat_id: int, message_id: int) -> dict[str, Any] | None:
@@ -97,9 +92,10 @@ async def update_panel_opts(chat_id: int, message_id: int, **kwargs: Any) -> dic
     try:
         redis = get_redis()
         await redis.set(key, json.dumps(panel), ex=86400)
+        _IN_MEMORY_PANELS.discard(key)
     except Exception as exc:
         log.warning("panel_opts_redis_update_failed", error=str(exc))
-        _IN_MEMORY_PANELS[key] = panel
+        _IN_MEMORY_PANELS.put(key, panel)
 
     return opts
 

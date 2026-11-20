@@ -170,7 +170,9 @@ async def _convert_from_tgs(
 ) -> OutputFile:
     """Render TGS to PNG frames first, then encode to target format."""
     frames_dir = work_dir / "tgs_frames"
-    res = await render_tgs_to_frames(tgs_path, frames_dir)
+    res = await render_tgs_to_frames(
+        tgs_path, frames_dir, first_only=target.id in (TARGET_PNG.id, TARGET_WEBP.id)
+    )
 
     fps = res.get("fps", 30.0)
 

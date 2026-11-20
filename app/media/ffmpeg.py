@@ -22,14 +22,12 @@ DEFAULT_TIMEOUT = 120  # seconds — fallback when the caller passes no settings
 # pressure no matter which feature (or how many users) trigger jobs at once.
 # Sized lazily from the first settings seen; tests reset via reset helper.
 _ffmpeg_slots: asyncio.Semaphore | None = None
-_ffmpeg_slots_size: int = 0
 
 
 def reset_ffmpeg_limiter() -> None:
     """Drop the cached semaphore (test isolation)."""
-    global _ffmpeg_slots, _ffmpeg_slots_size
+    global _ffmpeg_slots
     _ffmpeg_slots = None
-    _ffmpeg_slots_size = 0
 
 
 def configure_ffmpeg_limiter(settings: Settings) -> None:
@@ -37,14 +35,23 @@ def configure_ffmpeg_limiter(settings: Settings) -> None:
     _slots(settings.max_concurrent_jobs)
 
 
-def _slots(size: int) -> asyncio.Semaphore:
-    global _ffmpeg_slots, _ffmpeg_slots_size
-    size = max(1, size)
-    if _ffmpeg_slots is None or _ffmpeg_slots_size != size:
+def _slots(size: int | None = None) -> asyncio.Semaphore:
+    global _ffmpeg_slots
+    if _ffmpeg_slots is None:
+        size = max(1, size if size is not None else 4)
         _ffmpeg_slots = asyncio.Semaphore(size)
-        _ffmpeg_slots_size = size
         log.info("ffmpeg_limiter_configured", max_concurrent_jobs=size)
     return _ffmpeg_slots
+
+
+async def _diagnostics(proc: asyncio.subprocess.Process) -> bytes:
+    """Drain even a noisy encoder without retaining its whole error stream."""
+    assert proc.stderr is not None
+    prefix = bytearray()
+    while chunk := await proc.stderr.read(65536):
+        prefix.extend(chunk[: 2048 - len(prefix)])
+    await proc.wait()
+    return bytes(prefix)
 
 
 async def run_ffmpeg(
@@ -61,7 +68,7 @@ async def run_ffmpeg(
     """
     if timeout is None:
         timeout = float(settings.job_timeout) if settings is not None else DEFAULT_TIMEOUT
-    slots = _slots(settings.max_concurrent_jobs if settings is not None else 4)
+    slots = _slots(settings.max_concurrent_jobs if settings is not None else None)
     cmd = ["ffmpeg", "-y", "-loglevel", "error", *args]
 
     log.debug("ffmpeg_start", cmd=" ".join(cmd))
@@ -73,7 +80,7 @@ async def run_ffmpeg(
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdout=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
             )
@@ -81,26 +88,20 @@ async def run_ffmpeg(
             raise ConversionError(f"failed to spawn ffmpeg: {exc}") from exc
 
         try:
-            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stderr = await asyncio.wait_for(_diagnostics(proc), timeout=timeout)
         except TimeoutError:
-            if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
             log.warning("ffmpeg_timeout", timeout=timeout, cmd=" ".join(cmd[:10]))
             raise ConversionTimeoutError(f"ffmpeg conversion timed out after {timeout}s") from None
         except asyncio.CancelledError:
-            if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
             log.warning("ffmpeg_cancelled", cmd=" ".join(cmd[:10]))
             raise
         finally:
-            if proc is not None and proc.returncode is None:
+            if proc.returncode is None:
                 try:
                     proc.kill()
-                    await proc.wait()
-                except Exception:
+                except ProcessLookupError:
                     pass
+                await _diagnostics(proc)
 
     if proc.returncode != 0:
         err_text = stderr.decode("utf-8", errors="replace").strip()

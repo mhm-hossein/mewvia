@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
-import time
 from pathlib import Path
 
 import paramiko
 
-HOST = os.environ.get("MEWVIA_REMOTE_HOST", "89.124.99.39")
+HOST = os.environ.get("MEWVIA_REMOTE_HOST", "")
 USER = os.environ.get("MEWVIA_REMOTE_USER", "root")
 PASSWORD = os.environ.get("MEWVIA_REMOTE_PASSWORD", "")
 REMOTE_DIR = os.environ.get("MEWVIA_REMOTE_DIR", "/root/Mewvia")
@@ -23,7 +23,7 @@ if sys.platform == "win32":
 
 def connect_ssh() -> paramiko.SSHClient:
     ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.load_system_host_keys()
     ssh.connect(
         HOST,
         username=USER,
@@ -41,13 +41,23 @@ def connect_ssh() -> paramiko.SSHClient:
 
 
 def exec_ssh(ssh: paramiko.SSHClient, cmd: str, timeout: float = 300) -> tuple[str, str]:
-    _stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
-    return out, err
+    with ssh.get_transport().open_session(timeout=timeout) as channel:
+        channel.settimeout(timeout)
+        channel.set_combine_stderr(True)
+        channel.exec_command(cmd)
+        with channel.makefile("rb") as stream:
+            out = stream.read().decode("utf-8", errors="replace")
+        status = channel.recv_exit_status()
+        if status != 0:
+            raise RuntimeError(f"remote command failed ({status}): {out}")
+        return out, ""
 
 
 def main():
+    if not HOST:
+        sys.exit("Set MEWVIA_REMOTE_HOST and verify the server's key in known_hosts first.")
+    remote_dir = shlex.quote(REMOTE_DIR)
+    compose = f"cd {remote_dir} && docker compose -f docker-compose.yml"
     print(f"Connecting via SSH to {USER}@{HOST}...")
     ssh = connect_ssh()
     print("Connected to SSH successfully!")
@@ -89,7 +99,7 @@ def main():
 
     transferred = 0
     for root, dirs, files in os.walk(LOCAL_DIR):
-        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith(".")]
         rel_path = Path(root).relative_to(LOCAL_DIR)
 
         if str(rel_path) == ".":
@@ -102,6 +112,8 @@ def main():
         for file_name in files:
             if (
                 file_name in ignored_files
+                or (file_name.startswith(".env") and file_name != ".env.example")
+                or Path(root, file_name).is_symlink()
                 or file_name.endswith(".pyc")
                 or file_name.endswith(".dump")
             ):
@@ -118,28 +130,25 @@ def main():
 
     # Launching containers on remote server
     print("Launching Docker Compose containers on remote server...")
-    out, err = exec_ssh(ssh, f"cd {REMOTE_DIR} && docker compose up -d", timeout=120)
+    out, err = exec_ssh(ssh, f"{compose} build", timeout=900)
     print(out)
     if err:
         print("Up stderr:", err)
 
-    print("Waiting 8 seconds for containers to initialize...")
-    time.sleep(8)
-
     print("Running database migrations on remote server...")
     out, err = exec_ssh(
-        ssh, f"cd {REMOTE_DIR} && docker compose exec -T bot alembic upgrade head", timeout=120
+        ssh, f"{compose} run --rm -T bot alembic upgrade head", timeout=300
     )
     print(out)
     if err:
         print("Migration output:", err)
 
     print("Inspecting remote container status...")
-    out, err = exec_ssh(ssh, f"cd {REMOTE_DIR} && docker compose ps")
+    out, err = exec_ssh(ssh, f"{compose} up -d --wait", timeout=300)
     print(out)
 
     print("Inspecting remote bot logs...")
-    out, err = exec_ssh(ssh, f"cd {REMOTE_DIR} && docker compose logs --tail=30 bot")
+    out, err = exec_ssh(ssh, f"{compose} logs --tail=30 bot")
     print(out)
 
     ssh.close()

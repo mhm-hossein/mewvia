@@ -876,8 +876,8 @@ async def _handle_url_input(
             and cookie_rec.is_active
             and cookie_rec.status != "invalid"
         ):
-            disk_cookie = Path("/data/cookies/instagram.txt")
-            if disk_cookie.is_file() and disk_cookie.stat().st_size > 0:  # noqa: ASYNC240
+            disk_cookie = settings.cookie_dir / "instagram.txt"
+            if disk_cookie.is_file() and disk_cookie.stat().st_size > 0:
                 cookie_file_str = str(disk_cookie)
 
     try:

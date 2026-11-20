@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     tmp_dir: Path = Path("/data/tmp")
+    cookie_dir: Path = Path("/data/cookies")
     backup_dir: Path = Path("/data/backups")
     health_file: Path = Path("/data/health")
 

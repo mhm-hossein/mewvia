@@ -93,8 +93,11 @@ class UserRepo:
                 User.first_name.ilike(like),
                 User.last_name.ilike(like),
             ]
-            if query.lstrip("-").isdigit():
-                conditions.append(User.telegram_id == int(query))
+            digits = query.removeprefix("-")
+            if len(digits) <= 19 and digits.isdecimal():
+                candidate = int(query)
+                if -(2**63) <= candidate < 2**63:
+                    conditions.append(User.telegram_id == candidate)
             stmt = stmt.where(or_(*conditions))
         return stmt
 
