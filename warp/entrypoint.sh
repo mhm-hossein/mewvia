@@ -27,6 +27,14 @@ if [ ! -f "$WG_CONF" ]; then
 fi
 
 echo "[+] Starting WireGuard"
+# /proc/sys is read-only without --privileged, so wg-quick's internal
+# `sysctl -q net.ipv4.conf.all.src_valid_mark=1` aborts the whole setup and the
+# container exits. The compose `sysctls:` key already seeds that value, so make
+# the in-script call non-fatal instead of requiring a privileged container.
+if ! sysctl -q net.ipv4.conf.all.src_valid_mark=1 2>/dev/null; then
+  echo "[!] sysctl is not writable here; making wg-quick's src_valid_mark call non-fatal"
+  sed -i 's/cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1/true/' /usr/bin/wg-quick
+fi
 wg-quick up wgcf
 echo "[+] WireGuard is up"
 
