@@ -130,7 +130,7 @@ def build_dispatcher(
             "shazam",
             "stickerpack",
             "tag_editor",
-            "text_overlay",
+            "textoverlay",
             "videotools",
             "wide",
         }:
