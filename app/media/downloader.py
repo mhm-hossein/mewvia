@@ -340,9 +340,6 @@ def _build_ytdlp_opts(
             "youtubepot-bgutilhttp": {
                 "base_url": ["http://warp:4416"],
             },
-            "youtube": {
-                "player_client": ["web", "mweb"],
-            },
         },
     }
 

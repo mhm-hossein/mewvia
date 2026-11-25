@@ -79,11 +79,18 @@ fi
 # Enforce destination policy on the proxy's actual outbound sockets, after DNS
 # resolution. Established client connections must still receive SOCKS replies.
 iptables -A OUTPUT -m owner --uid-owner nobody -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for proto in tcp udp; do
-  iptables -A OUTPUT -m owner --uid-owner nobody -p "$proto" -d 127.0.0.11 --dport 53 -j ACCEPT
-done
+# Docker's embedded resolver is reached over UDP, TCP and raw sockets; a
+# port-53-only rule leaves name resolution broken.
+iptables -A OUTPUT -m owner --uid-owner nobody -d 127.0.0.11 -j ACCEPT
 for net in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4; do
   iptables -A OUTPUT -m owner --uid-owner nobody -d "$net" -j REJECT
 done
-ip6tables -A OUTPUT -m owner --uid-owner nobody -j REJECT
+# Do NOT blanket-REJECT IPv6 egress here: microsocks resolves destinations
+# with AF_UNSPEC and aborts the whole SOCKS request when the IPv6 attempt is
+# rejected, so every download fails with "Can't complete SOCKS5 connection".
+# The WireGuard interface has no IPv6 route (the tunnel is IPv4-only here),
+# so there is nothing to leak; block only the IPv6 metadata/link-local scopes.
+for net in ::1/128 fe80::/10 fc00::/7 ff00::/8; do
+  ip6tables -A OUTPUT -m owner --uid-owner nobody -d "$net" -j REJECT
+done
 exec setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs microsocks -i 0.0.0.0 -p 1080
