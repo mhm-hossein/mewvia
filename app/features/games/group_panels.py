@@ -10,6 +10,7 @@ from aiogram.types import InlineKeyboardMarkup
 from app.callbacks import GroupGameCB
 from app.core.units import fa_digits
 from app.features.games.connect_four import COLS
+from app.features.games.connect_four_panel import board_lines
 from app.features.games.group_rules import (
     GAME_LABELS,
     GAME_RULES,
@@ -186,19 +187,7 @@ def _four(
             column = fa_digits(str(state["last_drop"] % COLS + 1))
             lines.append(f"آخرین حرکت: ستون {column}")
     board = state["board"]
-    winners = set(state.get("winning_cells", ()))
-    marks = {"X": "🔴", "O": "🔵", "_": "⚪"}
-    # Force left-to-right column order even in a Persian Telegram client.
-    lines.extend(["", "\u200e1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣"])
-    for start in range(0, len(board), COLS):
-        lines.append(
-            "\u200e"
-            + "".join(
-                "🟡" if pos in winners else marks[board[pos]] for pos in range(start, start + COLS)
-            )
-        )
-    if winners:
-        lines.append("🟡 مهره‌های خط برنده")
+    lines.extend(board_lines(board, state.get("winning_cells", ())))
     if not finished:
         for col in range(COLS):
             full = board[col] != "_"

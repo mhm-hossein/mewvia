@@ -38,6 +38,7 @@ PRIVATE_BOT_COMMANDS = [
     BotCommand(command="cancel", description="انصراف و لغو عملیات جاری"),
     BotCommand(command="shazam", description="تشخیص آهنگ با ویس، ویدیو یا فایل"),
     BotCommand(command="music", description="جستجوی مستقیم موزیک (اسپاتیفای و ساندکلاد)"),
+    BotCommand(command="game", description="بازی با میوویا — دوز، گل یا پوچ و بیشتر"),
     BotCommand(command="help", description="راهنما"),
     BotCommand(command="ping", description="بررسی زنده بودن ربات"),
 ]

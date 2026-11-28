@@ -12,13 +12,15 @@ from typing import Any, Literal
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import User as TelegramUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache.fallback import FallbackCache
 from app.cache.redis import get_redis
 from app.callbacks import MenuCB, NoopCB
-from app.callbacks.game import GameCB
+from app.callbacks.game import GameCB, SoloGameCB
 from app.core.logging import get_logger
 from app.core.units import fa_digits
 from app.db.models.game_stat import GameStat
@@ -27,6 +29,8 @@ from app.db.repo.game import GameRepo
 from app.db.repo.group_game import GroupGameRepo
 from app.db.repo.total_score import TotalScoreRepo
 from app.db.repo.user import UserRepo
+from app.features.games import solo_games
+from app.features.games.group_rules import GAME_LABELS
 from app.features.games.leagues import format_league_progress_bar, get_league
 from app.features.games.xo_engine import (
     calculate_score_delta,
@@ -252,11 +256,11 @@ def render_games_hub(
         f"• نرخ پیروزی: <b>{stat.win_rate}%</b>\n"
         f"• زنجیره برد فعلی: <b>{stat.current_streak}</b> {registry.text('streak_fire')} "
         f"(بهترین: {stat.max_streak})\n\n"
-        f"یک گزینه را انتخاب کنید:"
+        f"یک بازی برای رقابت با <b>میوویا</b> انتخاب کنید:"
     )
 
     kb = KB(registry)
-    # Row 1: Main Game
+    # Two rows of games against Mewvia.
     kb.button(
         "بازی دوز (XO)",
         callback_data=GameCB(action="diff").pack(),
@@ -269,9 +273,14 @@ def render_games_hub(
         style=Style.CONFIRM,
         emoji_slot="fist",
     )
-    kb.adjust(1, 1)
+    for game in solo_games.GAMES:
+        kb.button(
+            GAME_LABELS[game],
+            callback_data=SoloGameCB(action="start", game=game).pack(),
+            style=Style.CONFIRM,
+        )
 
-    # Row 2: Competition
+    # Ratings and profile.
     kb.button(
         "برترین‌ها و جدول رده‌بندی",
         callback_data=GameCB(action="lb").pack(),
@@ -284,23 +293,19 @@ def render_games_hub(
         style=Style.PRIMARY,
         emoji_slot="medal",
     )
-    kb.adjust(1, 2)
-
-    # Row 3: Rules & Math
     kb.button(
         "قوانین و راهنمای امتیازدهی",
         callback_data=GameCB(action="rules").pack(),
         style=Style.NEUTRAL,
         emoji_slot="file",
     )
-    # Row 4: Back to Main Menu
     kb.button(
         "بازگشت به منوی اصلی",
         callback_data=MenuCB(target="root").pack(),
         style=Style.NEUTRAL,
         emoji_slot="back",
     )
-    kb.adjust(1, 1, 2, 1, 1)
+    kb.adjust(2, 2, 2, 1, 1)
 
     return text, kb.as_markup()
 
@@ -651,69 +656,84 @@ def render_rules(registry: EmojiRegistry) -> tuple[str, InlineKeyboardMarkup]:
 # ---------------------------------------------------------------------------
 
 
-@router.message(
-    F.chat.type == ChatType.PRIVATE,
-    ReplyTextFilter(lambda: t("menu.games")),
-)
-async def reply_games(message: Message, session: AsyncSession) -> None:
-    if not message.from_user:
-        return
+async def _games_hub(
+    actor: TelegramUser, session: AsyncSession
+) -> tuple[str, InlineKeyboardMarkup]:
     registry = await ready_registry()
-    user_repo = UserRepo(session)
-    user = await user_repo.upsert_from_telegram(message.from_user)
-
+    user = await UserRepo(session).upsert_from_telegram(actor)
     game_repo = GameRepo(session)
     stat = await game_repo.get_or_create(user.telegram_id)
     rank = await game_repo.get_user_rank(user.telegram_id)
     total = await game_repo.get_total_players()
     combined = await TotalScoreRepo(session).total_for(user.telegram_id)
 
-    text, reply_markup = render_games_hub(user, stat, rank, total, registry, combined)
-    await message.reply(text, reply_markup=reply_markup)
+    return render_games_hub(user, stat, rank, total, registry, combined)
+
+
+@router.message(F.chat.type == ChatType.PRIVATE, Command("game"))
+@router.message(F.chat.type == ChatType.PRIVATE, ReplyTextFilter(lambda: t("menu.games")))
+async def reply_games(message: Message, session: AsyncSession) -> None:
+    if message.from_user:
+        text, reply_markup = await _games_hub(message.from_user, session)
+        await message.reply(text, reply_markup=reply_markup)
 
 
 @router.callback_query(MenuCB.filter(F.target == "games"))
-async def menu_games(query: CallbackQuery, session: AsyncSession) -> None:
-    if not query.from_user or not isinstance(query.message, Message):
-        return
-    await query.answer()
-    registry = await ready_registry()
-    user_repo = UserRepo(session)
-    user = await user_repo.upsert_from_telegram(query.from_user)
-
-    game_repo = GameRepo(session)
-    stat = await game_repo.get_or_create(user.telegram_id)
-    rank = await game_repo.get_user_rank(user.telegram_id)
-    total = await game_repo.get_total_players()
-    combined = await TotalScoreRepo(session).total_for(user.telegram_id)
-
-    text, reply_markup = render_games_hub(user, stat, rank, total, registry, combined)
-    try:
-        await query.message.edit_text(text, reply_markup=reply_markup)
-    except Exception:
-        pass
-
-
 @router.callback_query(GameCB.filter(F.action == "menu"))
 async def cb_games_menu(query: CallbackQuery, session: AsyncSession) -> None:
     if not query.from_user or not isinstance(query.message, Message):
         return
     await query.answer()
-    registry = await ready_registry()
-    user_repo = UserRepo(session)
-    user = await user_repo.upsert_from_telegram(query.from_user)
-
-    game_repo = GameRepo(session)
-    stat = await game_repo.get_or_create(user.telegram_id)
-    rank = await game_repo.get_user_rank(user.telegram_id)
-    total = await game_repo.get_total_players()
-    combined = await TotalScoreRepo(session).total_for(user.telegram_id)
-
-    text, reply_markup = render_games_hub(user, stat, rank, total, registry, combined)
+    text, reply_markup = await _games_hub(query.from_user, session)
     try:
         await query.message.edit_text(text, reply_markup=reply_markup)
     except Exception:
         pass
+
+
+@router.callback_query(F.message.chat.type == ChatType.PRIVATE, SoloGameCB.filter())
+async def cb_solo_game(
+    query: CallbackQuery, callback_data: SoloGameCB, session: AsyncSession
+) -> None:
+    message, cb = query.message, callback_data
+    if not isinstance(message, Message) or message.chat.id != query.from_user.id:
+        await query.answer()
+        return
+
+    key = solo_games.key_for(message.chat.id, message.message_id)
+    async with solo_games.lock(key):
+        state = await solo_games.load(key)
+        expired = "این دکمه قدیمی شده. برای بازی دوباره /game رو بفرست."
+        if cb.action == "start" and not cb.match_id and cb.game in solo_games.GAMES:
+            if state and not state.get("closed"):
+                await query.answer(expired)
+                return
+            updated = solo_games.new_match(cb.game)
+        elif (
+            not state
+            or state.get("closed")
+            or (cb.game, cb.match_id, cb.revision)
+            != (state["game"], state["match_id"], state["revision"])
+        ):
+            await query.answer(expired)
+            return
+        elif cb.action == "menu":
+            await query.answer()
+            text, markup = await _games_hub(query.from_user, session)
+            await message.edit_text(text, reply_markup=markup)
+            await solo_games.save(key, {**state, "closed": True})
+            return
+        elif cb.action == "again" and state["finished"]:
+            updated = solo_games.new_match(cb.game)
+        elif cb.action == "move" and (moved := solo_games.play(state, cb.move)) is not None:
+            updated = moved
+        else:
+            await query.answer("این حرکت قابل انجام نیست.")
+            return
+        await query.answer()
+        text, markup = solo_games.render(updated, await ready_registry())
+        await message.edit_text(text, reply_markup=markup)
+        await solo_games.save(key, updated)
 
 
 @router.callback_query(GameCB.filter(F.action == "diff"))

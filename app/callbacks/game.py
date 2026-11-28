@@ -33,3 +33,13 @@ class GroupGameCB(CallbackData, prefix="gg"):
     side: str = ""
     match_id: str = ""
     revision: int = 0
+
+
+class SoloGameCB(CallbackData, prefix="sg"):
+    """Actions for private practice games against Mewvia."""
+
+    action: str
+    game: str
+    match_id: str = ""
+    revision: int = 0
+    move: int = -1
